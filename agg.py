@@ -29,7 +29,6 @@ MAX_OPEN_TRADES = 3
 TELEGRAM_TOKEN = "8679615295:AAFsFvOUk21PGvO49o4vaEB8VYBYRIl_xMw"
 TELEGRAM_CHAT_ID = "7225721600"
 
-
 capital = START_CAPITAL
 daily_pnl = 0
 open_positions = {}
@@ -51,17 +50,15 @@ def send_telegram(message):
     except:
         pass
 
-
 # ==============================
-# DATA FETCH
+# DATA
 # ==============================
 
 def get_klines(symbol, interval):
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
-        response = requests.get(url, params=params)
-        data = response.json()
+        data = requests.get(url, params=params).json()
 
         if not data or isinstance(data, dict):
             return None
@@ -78,46 +75,40 @@ def get_klines(symbol, interval):
     except:
         return None
 
-
 # ==============================
-# STRATEGY (Relaxed Breakout)
+# STRATEGY (High Frequency Momentum)
 # ==============================
 
 def check_signal(symbol):
 
-    df_1h = get_klines(symbol, "1h")
-    df_15m = get_klines(symbol, "15m")
-
-    if df_1h is None or df_15m is None or len(df_1h) < 30 or len(df_15m) < 30:
+    df = get_klines(symbol, "15m")
+    if df is None or len(df) < 50:
         return None
 
-    df_15m["adx"] = ta.trend.adx(
-        df_15m["high"], df_15m["low"], df_15m["close"], 14
-    )
+    df["adx"] = ta.trend.adx(df["high"], df["low"], df["close"], 14)
+    df["atr"] = ta.volatility.average_true_range(df["high"], df["low"], df["close"], 14)
 
-    df_15m["atr"] = ta.volatility.average_true_range(
-        df_15m["high"], df_15m["low"], df_15m["close"], 14
-    )
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    prev_1h = df_1h.iloc[-2]
-    last_15m = df_15m.iloc[-1]
+    recent_high = df["high"].rolling(5).max().iloc[-2]
+    recent_low = df["low"].rolling(5).min().iloc[-2]
 
-    # LONG breakout
+    # LONG micro-breakout
     if (
-        last_15m["close"] > prev_1h["high"] and
-        last_15m["adx"] > 15
+        last["close"] > recent_high and
+        last["adx"] > 14
     ):
-        return ("LONG", last_15m["close"], last_15m["atr"])
+        return ("LONG", last["close"], last["atr"])
 
-    # SHORT breakout
+    # SHORT micro-breakout
     if (
-        last_15m["close"] < prev_1h["low"] and
-        last_15m["adx"] > 15
+        last["close"] < recent_low and
+        last["adx"] > 14
     ):
-        return ("SHORT", last_15m["close"], last_15m["atr"])
+        return ("SHORT", last["close"], last["atr"])
 
     return None
-
 
 # ==============================
 # TRADE MANAGEMENT
@@ -126,7 +117,7 @@ def check_signal(symbol):
 def open_trade(coin, direction, entry, atr):
     global capital, trades_today
 
-    stop_distance = atr * 1.3
+    stop_distance = atr * 1.2
     if stop_distance <= 0:
         return
 
@@ -135,10 +126,10 @@ def open_trade(coin, direction, entry, atr):
 
     if direction == "LONG":
         stop = entry - stop_distance
-        target = entry + stop_distance * 2.5
+        target = entry + stop_distance * 2
     else:
         stop = entry + stop_distance
-        target = entry - stop_distance * 2.5
+        target = entry - stop_distance * 2
 
     open_positions[coin] = {
         "direction": direction,
@@ -154,10 +145,8 @@ def open_trade(coin, direction, entry, atr):
         f"🔥 AGGRESSIVE {coin} {direction}\n"
         f"Entry: {round(entry,4)}\n"
         f"Stop: {round(stop,4)}\n"
-        f"Target: {round(target,4)}\n"
-        f"Capital: {round(capital,2)}"
+        f"Target: {round(target,4)}"
     )
-
 
 def check_exit(coin):
     global capital, daily_pnl
@@ -201,12 +190,11 @@ def check_exit(coin):
 
         send_telegram(
             f"💰 AGGRESSIVE CLOSED {coin}\n"
-            f"PnL: {round(pnl,2)} USDT\n"
+            f"PnL: {round(pnl,2)}\n"
             f"Capital: {round(capital,2)}"
         )
 
         del open_positions[coin]
-
 
 # ==============================
 # HEARTBEAT
@@ -225,7 +213,6 @@ def heartbeat():
         )
         last_heartbeat_hour = hour
 
-
 # ==============================
 # DAILY RESET
 # ==============================
@@ -236,19 +223,18 @@ def daily_reset():
     if date.today() != current_day:
         send_telegram(
             f"📊 DAILY REPORT\n"
-            f"PnL: {round(daily_pnl,2)} USDT\n"
+            f"PnL: {round(daily_pnl,2)}\n"
             f"Capital: {round(capital,2)}"
         )
         trades_today = 0
         daily_pnl = 0
         current_day = date.today()
 
-
 # ==============================
 # MAIN LOOP
 # ==============================
 
-send_telegram("🚀 Aggressive Breakout (More Active) Online")
+send_telegram("🚀 Aggressive High-Frequency Engine Online")
 
 while True:
     try:
@@ -256,11 +242,9 @@ while True:
         heartbeat()
         daily_reset()
 
-        # Check exits first
         for coin in list(open_positions.keys()):
             check_exit(coin)
 
-        # New trades
         if trades_today < MAX_TRADES_PER_DAY and len(open_positions) < MAX_OPEN_TRADES:
 
             for coin in SYMBOLS.keys():
